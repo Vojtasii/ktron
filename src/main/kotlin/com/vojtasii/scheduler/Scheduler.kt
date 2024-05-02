@@ -7,7 +7,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -27,15 +26,21 @@ class Scheduler(
     private var isStarted: Boolean = false
 
     suspend fun start(onReceive: suspend (ScheduledJobStatus) -> Unit) {
-        jobs.forEach { (_, job) -> job.cancel() }
-        jobs.clear()
+        stop()
         isStarted = true
         repository.getAll().forEach { job ->
             jobs[job.id] = newJob(job)
         }
         scheduleScope.launch {
             while (true) {
-                onReceive(channel.receive())
+                val result = channel.receiveCatching()
+                if (result.isSuccess) {
+                    onReceive(result.getOrThrow())
+                } else if (result.exceptionOrNull() is CancellationException) {
+                    onReceive(ScheduledJobStatus.Cancelled)
+                } else {
+                    onReceive(ScheduledJobStatus.Failed)
+                }
             }
         }
     }
